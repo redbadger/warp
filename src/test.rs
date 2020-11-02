@@ -33,8 +33,8 @@
 //!
 //! ```
 //! # use warp::Filter;
-//! #[test]
-//! fn test_sum() {
+//! #[tokio::test]
+//! async fn test_sum() {
 //! #    let sum = || warp::any().map(|| 3);
 //!     let filter = sum();
 //!
@@ -42,6 +42,7 @@
 //!     let value = warp::test::request()
 //!         .path("/1/2")
 //!         .filter(&filter)
+//!         .await
 //!         .unwrap();
 //!     assert_eq!(value, 3);
 //!
@@ -227,6 +228,22 @@ impl RequestBuilder {
         self
     }
 
+    /// Set the remote address of this request
+    ///
+    /// Default is no remote address.
+    ///
+    /// # Example
+    /// ```
+    /// use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    ///
+    /// let req = warp::test::request()
+    ///     .remote_addr(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080));
+    /// ```
+    pub fn remote_addr(mut self, addr: SocketAddr) -> Self {
+        self.remote_addr = Some(addr);
+        self
+    }
+
     /// Add a type to the request's `http::Extensions`.
     pub fn extension<T>(mut self, ext: T) -> Self
     where
@@ -356,7 +373,7 @@ impl RequestBuilder {
                 let res = match result {
                     Ok(rep) => rep.into_response(),
                     Err(rej) => {
-                        log::debug!("rejected: {:?}", rej);
+                        tracing::debug!("rejected: {:?}", rej);
                         rej.into_response()
                     }
                 };
@@ -481,7 +498,12 @@ impl WsBuilder {
                 .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
                 .req;
 
-            let uri = format!("http://{}{}", addr, req.uri().path())
+            let query_string = match req.uri().query() {
+                Some(q) => format!("?{}", q),
+                None => String::from(""),
+            };
+
+            let uri = format!("http://{}{}{}", addr, req.uri().path(), query_string)
                 .parse()
                 .expect("addr + path is valid URI");
 

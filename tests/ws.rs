@@ -1,6 +1,7 @@
 #![deny(warnings)]
 
 use futures::{FutureExt, SinkExt, StreamExt};
+use serde_derive::Deserialize;
 use warp::ws::Message;
 use warp::Filter;
 
@@ -167,6 +168,58 @@ async fn limit_message_size() {
     client.send(warp::ws::Message::binary(vec![0; 1025])).await;
     client.send_text("hello warp").await;
     assert!(client.recv().await.is_err());
+}
+
+#[tokio::test]
+async fn limit_frame_size() {
+    let _ = pretty_env_logger::try_init();
+
+    let echo = warp::ws().map(|ws: warp::ws::Ws| {
+        ws.max_frame_size(1024).on_upgrade(|websocket| {
+            // Just echo all messages back...
+            let (tx, rx) = websocket.split();
+            rx.forward(tx).map(|result| {
+                assert!(result.is_err());
+                assert_eq!(
+                    format!("{}", result.unwrap_err()).as_str(),
+                    "Space limit exceeded: Message length too big: 1025 > 1024"
+                );
+            })
+        })
+    });
+    let mut client = warp::test::ws().handshake(echo).await.expect("handshake");
+
+    client.send(warp::ws::Message::binary(vec![0; 1025])).await;
+    client.send_text("hello warp").await;
+    assert!(client.recv().await.is_err());
+}
+
+#[derive(Deserialize)]
+struct MyQuery {
+    hello: String,
+}
+
+#[tokio::test]
+async fn ws_with_query() {
+    let ws_filter = warp::path("my-ws")
+        .and(warp::query::<MyQuery>())
+        .and(warp::ws())
+        .map(|query: MyQuery, ws: warp::ws::Ws| {
+            assert_eq!(query.hello, "world");
+
+            ws.on_upgrade(|websocket| {
+                let (tx, rx) = websocket.split();
+                rx.inspect(|i| log::debug!("ws recv: {:?}", i))
+                    .forward(tx)
+                    .map(|_| ())
+            })
+        });
+
+    warp::test::ws()
+        .path("/my-ws?hello=world")
+        .handshake(ws_filter)
+        .await
+        .expect("handshake");
 }
 
 fn ws_echo() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Copy {
